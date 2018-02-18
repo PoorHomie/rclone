@@ -3,12 +3,16 @@ package http
 import (
 	"fmt"
 	"html/template"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
 	"strconv"
 	"strings"
+	"sort"
+	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/ncw/rclone/cmd"
 	"github.com/ncw/rclone/cmd/serve/httplib"
 	"github.com/ncw/rclone/cmd/serve/httplib/httpflags"
@@ -20,8 +24,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var templateFile ""
+
 func init() {
 	httpflags.AddFlags(Command.Flags())
+	Command.Flags().StringVarP(&templateFile, "template", "", templateFile, "Template file to use for directory rendering.")
 	vfsflags.AddFlags(Command.Flags())
 }
 
@@ -72,6 +79,14 @@ func newServer(f fs.Fs, opt *httplib.Options) *server {
 
 // serve runs the http server - doesn't return
 func (s *server) serve() {
+	if templateFile != "" {
+        templateContent, err := ioutil.ReadFile(templateFile)
+        if err != nil {
+            log.Fatal(err)
+        }
+        indexTemplate = template.Must(template.New("index").Parse(string(templateContent)))
+    }
+
 	fs.Logf(s.f, "Serving on %s", s.srv.URL())
 	s.srv.Serve()
 }
@@ -100,6 +115,17 @@ type entry struct {
 	remote string
 	URL    string
 	Leaf   string
+	IsDir  bool
+	Size   int64
+	ModTime time.Time
+}
+
+func (e entry) HumanSize() string {
+	return humanize.Bytes(uint64(e.Size))
+}
+
+func (e entry) HumanModTime(format string) string {
+	return e.ModTime.Format(format)
 }
 
 // entries represents a directory
@@ -110,15 +136,37 @@ func (es *entries) addEntry(node interface {
 	Path() string
 	Name() string
 	IsDir() bool
+	Size() int64
+	ModTime() time.Time
 }) {
 	remote := node.Path()
 	leaf := node.Name()
 	urlRemote := leaf
+	size := node.Size()
+	modTime := node.ModTime()
 	if node.IsDir() {
 		leaf += "/"
 		urlRemote += "/"
 	}
-	*es = append(*es, entry{remote: remote, URL: rest.URLPathEscape(urlRemote), Leaf: leaf})
+	*es = append(*es, entry{remote: remote, URL: rest.URLPathEscape(urlRemote), Leaf: leaf, IsDir: node.IsDir(), Size: size, ModTime: modTime})
+}
+
+type byNameDirFirst entries
+
+// By Name Dir First
+func (e byNameDirFirst) Len() int      { return len(e) }
+func (e byNameDirFirst) Swap(i, j int) { e[i], e[j] = e[j], e[i] }
+
+// Treat upper and lower case equally
+func (e byNameDirFirst) Less(i, j int) bool {
+
+	// if both are dir or file sort normally
+	if e[i].IsDir == e[j].IsDir {
+		return strings.ToLower(e[i].Leaf) < strings.ToLower(e[j].Leaf)
+	}
+
+	// always sort dir ahead of file
+	return e[i].IsDir
 }
 
 // indexPage is a directory listing template
@@ -127,11 +175,26 @@ var indexPage = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>{{ .Title }}</title>
+<style type="text/css">
+td { padding:0 10px 0 10px;}
+</style>
 </head>
 <body>
 <h1>{{ .Title }}</h1>
-{{ range $i := .Entries }}<a href="{{ $i.URL }}">{{ $i.Leaf }}</a><br />
-{{ end }}</body>
+<table>
+<tr><td><a href="..">../</a></td></tr>
+{{ range $i := .Entries }}
+<tr>
+<td><a href="{{ $i.URL }}">{{ $i.Leaf }}</a></td><td>{{ $i.HumanModTime "02-Jan-2006 03:04" }}</td>
+{{- if $i.IsDir}}
+<td>-</td>
+{{- else}}
+<td data-order="{{$i.Size}}">{{$i.HumanSize}}</td>
+{{- end}}
+{{ end }}
+</tr>
+</table>
+</body>
 </html>
 `
 
@@ -141,6 +204,7 @@ var indexTemplate = template.Must(template.New("index").Parse(indexPage))
 // indexData is used to fill in the indexTemplate
 type indexData struct {
 	Title   string
+	Path	string
 	Entries entries
 }
 
@@ -178,6 +242,8 @@ func (s *server) serveDir(w http.ResponseWriter, r *http.Request, dirRemote stri
 		out.addEntry(node)
 	}
 
+	sort.Sort(byNameDirFirst(out))
+
 	// Account the transfer
 	accounting.Stats.Transferring(dirRemote)
 	defer accounting.Stats.DoneTransferring(dirRemote, true)
@@ -185,7 +251,8 @@ func (s *server) serveDir(w http.ResponseWriter, r *http.Request, dirRemote stri
 	fs.Infof(dirRemote, "%s: Serving directory", r.RemoteAddr)
 	err = indexTemplate.Execute(w, indexData{
 		Entries: out,
-		Title:   fmt.Sprintf("Directory listing of /%s", dirRemote),
+		Title:   fmt.Sprintf("Index of /%s", dirRemote),
+		Path: dirRemote,
 	})
 	if err != nil {
 		internalError(dirRemote, w, "Failed to render template", err)

@@ -140,6 +140,12 @@
   revision = "9c27e83ceccc8f8bbc9afdc17c50798529d608b1"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/dustin/go-humanize"
+  packages = ["."]
+  revision = "bb3d318650d48840a39aa21a027c6630e198e626"
+
+[[projects]]
   name = "github.com/go-ini/ini"
   packages = ["."]
   revision = "32e4c1e6bc4e7d0d8451aa6b75200d19e37a536a"

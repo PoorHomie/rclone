@@ -148,3 +148,7 @@
 [[constraint]]
   branch = "master"
   name = "github.com/okzk/sdnotify"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/dustin/go-humanize"
