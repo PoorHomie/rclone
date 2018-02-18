@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -24,7 +25,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var templateFile ""
+var templateFile = ""
 
 func init() {
 	httpflags.AddFlags(Command.Flags())
